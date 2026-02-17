@@ -7,3 +7,4 @@ logs/
 my_script
 .idea
 .vscode/
+examples/*.ipynb
