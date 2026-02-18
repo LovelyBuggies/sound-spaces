@@ -583,7 +583,7 @@ def observations_to_image(observation: Dict, info: Dict, pred=None) -> np.ndarra
             image=top_down_map,
             agent_center_coord=map_agent_pos,
             agent_rotation=info["top_down_map"]["agent_angle"],
-            agent_radius_px=top_down_map.shape[0] // 32,
+            agent_radius_px=top_down_map.shape[0] // 24,
         )
         if pred is not None:
             from habitat.utils.geometry_utils import quaternion_rotate_vector
@@ -690,21 +690,11 @@ def observations_to_image(observation: Dict, info: Dict, pred=None) -> np.ndarra
     if overlay_lines:
         y = 14
         for line in overlay_lines:
-            (text_w, text_h), baseline = cv2.getTextSize(
-                line, cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1
-            )
-            cv2.rectangle(
-                frame,
-                (8, y - text_h - 2),
-                (8 + text_w + 4, y + baseline + 2),
-                (0, 0, 0),
-                thickness=-1,
-            )
             cv2.putText(
                 frame,
                 line,
                 (10, y),
-                cv2.FONT_HERSHEY_SIMPLEX,
+                cv2.FONT_HERSHEY_DUPLEX,
                 0.3,
                 (255, 255, 255),
                 1,
