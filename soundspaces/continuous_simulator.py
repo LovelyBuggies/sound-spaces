@@ -278,8 +278,22 @@ class ContinuousSoundSpacesSim(Simulator, ABC):
 
     @property
     def current_scene_name(self):
-        # config.SCENE (_current_scene) looks like 'data/scene_datasets/replica/office_1/habitat/mesh_semantic.ply'
-        return self._current_scene.split('/')[3]
+        # Support both relative and absolute scene paths.
+        scene_path = os.path.normpath(self._current_scene)
+        parts = scene_path.split(os.sep)
+
+        # Typical layout: .../scene_datasets/<dataset>/<scene>/...
+        if "scene_datasets" in parts:
+            idx = parts.index("scene_datasets")
+            if idx + 2 < len(parts):
+                return parts[idx + 2]
+
+        # Replica mesh path often ends with .../<scene>/habitat/mesh_semantic.ply
+        if len(parts) >= 3 and parts[-2] == "habitat":
+            return parts[-3]
+
+        # Fallback to filename stem.
+        return os.path.splitext(os.path.basename(scene_path))[0]
 
     @property
     def current_scene_observation_file(self):
@@ -330,7 +344,8 @@ class ContinuousSoundSpacesSim(Simulator, ABC):
             self._sim = habitat_sim.Simulator(self.sim_config)
             self.add_acoustic_config()
             audio_sensor = self._sim.get_agent(0)._sensors["audio_sensor"]
-            audio_sensor.setAudioMaterialsJSON("data/mp3d_material_config.json")
+            materials_cfg = getattr(self.config.AUDIO, "MATERIALS_CONFIG_PATH", "data/mp3d_material_config.json")
+            audio_sensor.setAudioMaterialsJSON(materials_cfg)
             logging.debug('Loaded scene {}'.format(self.current_scene_name))
 
             self.points, self.graph = load_metadata(self.metadata_dir)

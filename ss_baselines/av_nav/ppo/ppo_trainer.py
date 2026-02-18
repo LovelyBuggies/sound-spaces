@@ -9,6 +9,7 @@
 import os
 import time
 import logging
+import glob
 from collections import deque
 from typing import Dict, List
 import json
@@ -22,18 +23,19 @@ from numpy.linalg import norm
 from gym import spaces
 
 from habitat import Config, logger
-from habitat.utils.visualizations.utils import observations_to_image
 from soundspaces.tasks.shortest_path_follower import ShortestPathFollower
 from ss_baselines.common.base_trainer import BaseRLTrainer
 from ss_baselines.common.baseline_registry import baseline_registry
 from ss_baselines.common.env_utils import construct_envs
 from ss_baselines.common.environments import get_env_class
 from ss_baselines.common.rollout_storage import RolloutStorage
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from ss_baselines.common.utils import (
     batch_obs,
     generate_video,
+    get_scene_name,
     linear_decay,
+    observations_to_image,
     plot_top_down_map,
     resize_observation
 )
@@ -88,7 +90,7 @@ class PPOTrainer(BaseRLTrainer):
             max_grad_norm=ppo_cfg.max_grad_norm,
         )
 
-    def save_checkpoint(self, file_name: str) -> None:
+    def save_checkpoint(self, file_name: str, extra_state=None) -> None:
         r"""Save checkpoint with specified name.
 
         Args:
@@ -101,6 +103,8 @@ class PPOTrainer(BaseRLTrainer):
             "state_dict": self.agent.state_dict(),
             "config": self.config,
         }
+        if extra_state is not None:
+            checkpoint["extra_state"] = extra_state
         torch.save(
             checkpoint, os.path.join(self.config.CHECKPOINT_FOLDER, file_name)
         )
@@ -116,11 +120,47 @@ class PPOTrainer(BaseRLTrainer):
         Returns:
             dict containing checkpoint info
         """
+        # PyTorch 2.6+ defaults to weights_only=True, which cannot deserialize
+        # legacy checkpoints containing full config objects.
+        kwargs.setdefault("weights_only", False)
         return torch.load(checkpoint_path, *args, **kwargs)
+
+    def try_to_resume_checkpoint(self):
+        checkpoints = glob.glob(f"{self.config.CHECKPOINT_FOLDER}/ckpt.*.pth")
+        if len(checkpoints) == 0:
+            return 0, 0, 0
+
+        def ckpt_idx(path):
+            base = os.path.basename(path)
+            parts = base.split(".")
+            return int(parts[1])
+
+        last_ckpt = sorted(checkpoints, key=ckpt_idx)[-1]
+        ckpt_dict = self.load_checkpoint(last_ckpt, map_location="cpu")
+        self.agent.load_state_dict(ckpt_dict["state_dict"])
+
+        last_ckpt_id = ckpt_idx(last_ckpt)
+        extra_state = ckpt_dict.get("extra_state", {})
+        count_steps = int(extra_state.get("step", 0))
+        # Continue from the next global update. Fallback keeps compatibility with old checkpoints.
+        start_update = int(
+            extra_state.get(
+                "update",
+                ckpt_dict["config"].CHECKPOINT_INTERVAL * last_ckpt_id,
+            )
+        ) + 1
+        count_checkpoints = last_ckpt_id + 1
+
+        logger.info(
+            f"Resuming from {last_ckpt} at update={start_update}, steps={count_steps}"
+        )
+        return count_steps, count_checkpoints, start_update
 
     def _collect_rollout_step(
         self, rollouts, current_episode_reward, current_episode_step, episode_rewards,
-            episode_spls, episode_counts, episode_steps
+            episode_spls, episode_successes, episode_softspls,
+            episode_distance_to_goals, episode_normalized_distance_to_goals,
+            episode_counts, episode_steps
     ):
         pth_time = 0.0
         env_time = 0.0
@@ -165,6 +205,18 @@ class PPOTrainer(BaseRLTrainer):
         spls = torch.tensor(
             [[info['spl']] for info in infos]
         )
+        successes = torch.tensor(
+            [[info.get("success", 0.0)] for info in infos]
+        )
+        softspls = torch.tensor(
+            [[info.get("softspl", 0.0)] for info in infos]
+        )
+        distance_to_goals = torch.tensor(
+            [[info.get("distance_to_goal", 0.0)] for info in infos]
+        )
+        normalized_distance_to_goals = torch.tensor(
+            [[info.get("normalized_distance_to_goal", 0.0)] for info in infos]
+        )
 
         current_episode_reward += rewards
         current_episode_step += 1
@@ -174,6 +226,10 @@ class PPOTrainer(BaseRLTrainer):
         # the episode count will also increase by 1
         episode_rewards += (1 - masks) * current_episode_reward
         episode_spls += (1 - masks) * spls
+        episode_successes += (1 - masks) * successes
+        episode_softspls += (1 - masks) * softspls
+        episode_distance_to_goals += (1 - masks) * distance_to_goals
+        episode_normalized_distance_to_goals += (1 - masks) * normalized_distance_to_goals
         episode_steps += (1 - masks) * current_episode_step
         episode_counts += 1 - masks
         current_episode_reward *= masks
@@ -275,32 +331,54 @@ class PPOTrainer(BaseRLTrainer):
         # episode_rewards and episode_counts accumulates over the entire training course
         episode_rewards = torch.zeros(self.envs.num_envs, 1)
         episode_spls = torch.zeros(self.envs.num_envs, 1)
+        episode_successes = torch.zeros(self.envs.num_envs, 1)
+        episode_softspls = torch.zeros(self.envs.num_envs, 1)
+        episode_distance_to_goals = torch.zeros(self.envs.num_envs, 1)
+        episode_normalized_distance_to_goals = torch.zeros(self.envs.num_envs, 1)
         episode_steps = torch.zeros(self.envs.num_envs, 1)
         episode_counts = torch.zeros(self.envs.num_envs, 1)
         current_episode_reward = torch.zeros(self.envs.num_envs, 1)
         current_episode_step = torch.zeros(self.envs.num_envs, 1)
         window_episode_reward = deque(maxlen=ppo_cfg.reward_window_size)
         window_episode_spl = deque(maxlen=ppo_cfg.reward_window_size)
+        window_episode_success = deque(maxlen=ppo_cfg.reward_window_size)
+        window_episode_softspl = deque(maxlen=ppo_cfg.reward_window_size)
+        window_episode_distance_to_goal = deque(maxlen=ppo_cfg.reward_window_size)
+        window_episode_normalized_distance_to_goal = deque(maxlen=ppo_cfg.reward_window_size)
         window_episode_step = deque(maxlen=ppo_cfg.reward_window_size)
         window_episode_counts = deque(maxlen=ppo_cfg.reward_window_size)
 
         t_start = time.time()
         env_time = 0
         pth_time = 0
-        count_steps = 0
-        count_checkpoints = 0
+        count_steps, count_checkpoints, start_update = self.try_to_resume_checkpoint()
+        chunk_updates = int(os.environ.get("SS_TRAIN_CHUNK_UPDATES", "0"))
+        end_update = self.config.NUM_UPDATES
+        if chunk_updates > 0:
+            end_update = min(start_update + chunk_updates, self.config.NUM_UPDATES)
+            logger.info(
+                f"Training chunk enabled: updates [{start_update}, {end_update})"
+            )
+
+        if start_update >= self.config.NUM_UPDATES:
+            logger.info(
+                f"Reached target NUM_UPDATES={self.config.NUM_UPDATES}, skipping train run."
+            )
+            self.envs.close()
+            return
 
         lr_scheduler = LambdaLR(
             optimizer=self.agent.optimizer,
             lr_lambda=lambda x: linear_decay(x, self.config.NUM_UPDATES),
         )
 
-        with TensorboardWriter(
-            self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
+        with WandbWriter(
+            self.config.WB_LOG_DIR, flush_secs=self.flush_secs
         ) as writer:
-            for update in range(self.config.NUM_UPDATES):
+            last_ckpt_update = None
+            for update in range(start_update, end_update):
                 if ppo_cfg.use_linear_lr_decay:
-                    lr_scheduler.step()
+                    lr_scheduler.step(update)
 
                 if ppo_cfg.use_linear_clip_decay:
                     self.agent.clip_param = ppo_cfg.clip_param * linear_decay(
@@ -314,6 +392,10 @@ class PPOTrainer(BaseRLTrainer):
                         current_episode_step,
                         episode_rewards,
                         episode_spls,
+                        episode_successes,
+                        episode_softspls,
+                        episode_distance_to_goals,
+                        episode_normalized_distance_to_goals,
                         episode_counts,
                         episode_steps
                     )
@@ -328,13 +410,37 @@ class PPOTrainer(BaseRLTrainer):
 
                 window_episode_reward.append(episode_rewards.clone())
                 window_episode_spl.append(episode_spls.clone())
+                window_episode_success.append(episode_successes.clone())
+                window_episode_softspl.append(episode_softspls.clone())
+                window_episode_distance_to_goal.append(episode_distance_to_goals.clone())
+                window_episode_normalized_distance_to_goal.append(
+                    episode_normalized_distance_to_goals.clone()
+                )
                 window_episode_step.append(episode_steps.clone())
                 window_episode_counts.append(episode_counts.clone())
 
                 losses = [value_loss, action_loss, dist_entropy]
                 stats = zip(
-                    ["count", "reward", "step", 'spl'],
-                    [window_episode_counts, window_episode_reward, window_episode_step, window_episode_spl],
+                    [
+                        "count",
+                        "reward",
+                        "step",
+                        "spl",
+                        "success",
+                        "softspl",
+                        "distance_to_goal",
+                        "normalized_distance_to_goal",
+                    ],
+                    [
+                        window_episode_counts,
+                        window_episode_reward,
+                        window_episode_step,
+                        window_episode_spl,
+                        window_episode_success,
+                        window_episode_softspl,
+                        window_episode_distance_to_goal,
+                        window_episode_normalized_distance_to_goal,
+                    ],
                 )
                 deltas = {
                     k: (
@@ -349,13 +455,25 @@ class PPOTrainer(BaseRLTrainer):
                 # this reward is averaged over all the episodes happened during window_size updates
                 # approximately number of steps is window_size * num_steps
                 if update % 10 == 0:
-                    writer.add_scalar("Environment/Reward", deltas["reward"] / deltas["count"], count_steps)
-                    writer.add_scalar("Environment/SPL", deltas["spl"] / deltas["count"], count_steps)
-                    writer.add_scalar("Environment/Episode_length", deltas["step"] / deltas["count"], count_steps)
-                    writer.add_scalar('Policy/Value_Loss', value_loss, count_steps)
-                    writer.add_scalar('Policy/Action_Loss', action_loss, count_steps)
-                    writer.add_scalar('Policy/Entropy', dist_entropy, count_steps)
-                    writer.add_scalar('Policy/Learning_Rate', lr_scheduler.get_lr()[0], count_steps)
+                    writer.add_scalar("env/reward", deltas["reward"] / deltas["count"], count_steps)
+                    writer.add_scalar("env/spl", deltas["spl"] / deltas["count"], count_steps)
+                    writer.add_scalar("env/success", deltas["success"] / deltas["count"], count_steps)
+                    writer.add_scalar("env/softspl", deltas["softspl"] / deltas["count"], count_steps)
+                    writer.add_scalar(
+                        "env/distance_to_goal",
+                        deltas["distance_to_goal"] / deltas["count"],
+                        count_steps,
+                    )
+                    writer.add_scalar(
+                        "env/normalized_distance_to_goal",
+                        deltas["normalized_distance_to_goal"] / deltas["count"],
+                        count_steps,
+                    )
+                    writer.add_scalar("env/episode_length", deltas["step"] / deltas["count"], count_steps)
+                    writer.add_scalar("policy/value_loss", value_loss, count_steps)
+                    writer.add_scalar("policy/action_loss", action_loss, count_steps)
+                    writer.add_scalar("policy/entropy", dist_entropy, count_steps)
+                    writer.add_scalar("policy/learning_rate", lr_scheduler.get_lr()[0], count_steps)
 
                 # log stats
                 if update > 0 and update % self.config.LOG_INTERVAL == 0:
@@ -391,22 +509,34 @@ class PPOTrainer(BaseRLTrainer):
 
                 # checkpoint model
                 if update % self.config.CHECKPOINT_INTERVAL == 0:
-                    self.save_checkpoint(f"ckpt.{count_checkpoints}.pth")
+                    self.save_checkpoint(
+                        f"ckpt.{count_checkpoints}.pth",
+                        extra_state={"step": count_steps, "update": update},
+                    )
                     count_checkpoints += 1
+                    last_ckpt_update = update
+
+            # Ensure each chunk persists progress even if the last update isn't on checkpoint cadence.
+            if end_update > start_update and last_ckpt_update != (end_update - 1):
+                self.save_checkpoint(
+                    f"ckpt.{count_checkpoints}.pth",
+                    extra_state={"step": count_steps, "update": end_update - 1},
+                )
+                count_checkpoints += 1
 
             self.envs.close()
 
     def _eval_checkpoint(
         self,
         checkpoint_path: str,
-        writer: TensorboardWriter,
+        writer: WandbWriter,
         checkpoint_index: int = 0
     ) -> Dict:
         r"""Evaluates a single checkpoint.
 
         Args:
             checkpoint_path: path of checkpoint
-            writer: tensorboard writer object for logging to tensorboard
+            writer: logger writer object for W&B logging
             checkpoint_index: index of cur checkpoint for logging
 
         Returns:
@@ -552,7 +682,8 @@ class PPOTrainer(BaseRLTrainer):
                                                            self.config.DISPLAY_RESOLUTION, 3))
                     frame = observations_to_image(observations[i], infos[i])
                     rgb_frames[i].append(frame)
-                    audios[i].append(observations[i]['audiogoal'])
+                    if "audiogoal" in observations[i]:
+                        audios[i].append(observations[i]["audiogoal"])
 
             if config.DISPLAY_RESOLUTION != model_resolution:
                 resize_observation(observations, model_resolution)
@@ -604,11 +735,15 @@ class PPOTrainer(BaseRLTrainer):
                             sound = current_episodes[i].info['sound']
                         else:
                             sound = current_episodes[i].sound_id.split('/')[1][:-4]
+                        episode_images = rgb_frames[i][:-1]
+                        episode_audios = audios[i][:-1]
+                        if len(episode_audios) != len(episode_images) or len(episode_audios) == 0:
+                            episode_audios = None
                         generate_video(
                             video_option=self.config.VIDEO_OPTION,
                             video_dir=self.config.VIDEO_DIR,
-                            images=rgb_frames[i][:-1],
-                            scene_name=current_episodes[i].scene_id.split('/')[3],
+                            images=episode_images,
+                            scene_name=get_scene_name(current_episodes[i].scene_id),
                             sound=sound,
                             sr=self.config.TASK_CONFIG.SIMULATOR.AUDIO.RIR_SAMPLING_RATE,
                             episode_id=current_episodes[i].episode_id,
@@ -616,7 +751,7 @@ class PPOTrainer(BaseRLTrainer):
                             metric_name='spl',
                             metric_value=infos[i]['spl'],
                             tb_writer=writer,
-                            audios=audios[i][:-1],
+                            audios=episode_audios,
                             fps=fps
                         )
 
@@ -628,8 +763,8 @@ class PPOTrainer(BaseRLTrainer):
                     if "top_down_map" in self.config.VISUALIZATION_OPTION:
                         top_down_map = plot_top_down_map(infos[i],
                                                          dataset=self.config.TASK_CONFIG.SIMULATOR.SCENE_DATASET)
-                        scene = current_episodes[i].scene_id.split('/')[3]
-                        writer.add_image('{}_{}_{}/{}'.format(config.EVAL.SPLIT, scene, current_episodes[i].episode_id,
+                        scene = get_scene_name(current_episodes[i].scene_id)
+                        writer.add_image('{}_{}_{}/{}'.format("eval", scene, current_episodes[i].episode_id,
                                                               config.BASE_TASK_CONFIG_PATH.split('/')[-1][:-5]),
                                          top_down_map,
                                          dataformats='WHC')
@@ -660,7 +795,7 @@ class PPOTrainer(BaseRLTrainer):
             )
         num_episodes = len(stats_episodes)
 
-        stats_file = os.path.join(config.TENSORBOARD_DIR, '{}_stats_{}.json'.format(config.EVAL.SPLIT, config.SEED))
+        stats_file = os.path.join(config.WB_LOG_DIR, '{}_stats_{}.json'.format(config.EVAL.SPLIT, config.SEED))
         new_stats_episodes = {','.join(key): value for key, value in stats_episodes.items()}
         with open(stats_file, 'w') as fo:
             json.dump(new_stats_episodes, fo)
@@ -677,10 +812,16 @@ class PPOTrainer(BaseRLTrainer):
             )
 
         if not config.EVAL.SPLIT.startswith('test'):
-            writer.add_scalar("{}/reward".format(config.EVAL.SPLIT), episode_reward_mean, checkpoint_index)
+            eval_env_step = (
+                checkpoint_index
+                * config.CHECKPOINT_INTERVAL
+                * config.RL.PPO.num_steps
+                * config.NUM_PROCESSES
+            )
+            writer.add_scalar("eval/reward", episode_reward_mean, eval_env_step)
             for metric_uuid in self.metric_uuids:
-                writer.add_scalar(f"{config.EVAL.SPLIT}/{metric_uuid}", episode_metrics_mean[metric_uuid],
-                                  checkpoint_index)
+                writer.add_scalar(f"eval/{metric_uuid}", episode_metrics_mean[metric_uuid],
+                                  eval_env_step)
 
         self.envs.close()
 

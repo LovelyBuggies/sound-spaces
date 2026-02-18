@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch
 import argparse
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.wandb import SummaryWriter
 from torchsummary import summary
 
 from soundspaces.utils import load_metadata

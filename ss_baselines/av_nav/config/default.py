@@ -31,9 +31,9 @@ _C.TRAINER_NAME = "AVNavTrainer"
 _C.ENV_NAME = "AudioNavRLEnv"
 _C.SIMULATOR_GPU_ID = 0
 _C.TORCH_GPU_ID = 0
-_C.VIDEO_OPTION = ["disk", "tensorboard"]
+_C.VIDEO_OPTION = ["disk", "wandb"]
 _C.VISUALIZATION_OPTION = ["top_down_map"]
-_C.TENSORBOARD_DIR = "tb"
+_C.WB_LOG_DIR = "wb"
 _C.VIDEO_DIR = "video_dir"
 _C.TEST_EPISODE_COUNT = 2
 _C.EVAL_CKPT_PATH_DIR = "data/checkpoints"  # path to ckpt or path to ckpts dir
@@ -120,6 +120,7 @@ _TC.SIMULATOR.AUDIO.BINAURAL_RIR_DIR = "data/binaural_rirs"
 _TC.SIMULATOR.AUDIO.RIR_SAMPLING_RATE = 44100
 _TC.SIMULATOR.AUDIO.SOURCE_SOUND_DIR = "data/sounds/1s_all"
 _TC.SIMULATOR.AUDIO.METADATA_DIR = "data/metadata"
+_TC.SIMULATOR.AUDIO.MATERIALS_CONFIG_PATH = "data/material_config.json"
 _TC.SIMULATOR.AUDIO.POINTS_FILE = 'points.txt'
 _TC.SIMULATOR.AUDIO.GRAPH_FILE = 'graph.pkl'
 _TC.SIMULATOR.AUDIO.HAS_DISTRACTOR_SOUND = False
@@ -189,7 +190,7 @@ def get_config(
     # config_name = os.path.basename(config_paths).split('.')[0]
     if model_dir is None:
         model_dir = 'data/models/output'
-    config.TENSORBOARD_DIR = os.path.join(model_dir, 'tb')
+    config.WB_LOG_DIR = os.path.join(model_dir, 'wb')
     config.CHECKPOINT_FOLDER = os.path.join(model_dir, 'data')
     config.VIDEO_DIR = os.path.join(model_dir, 'video_dir')
     config.LOG_FILE = os.path.join(model_dir, 'train.log')
@@ -199,7 +200,7 @@ def get_config(
         config.CMD_TRAILING_OPTS = opts
         config.merge_from_list(opts)
 
-    dirs = [config.VIDEO_DIR, config.TENSORBOARD_DIR, config.CHECKPOINT_FOLDER]
+    dirs = [config.VIDEO_DIR, config.WB_LOG_DIR, config.CHECKPOINT_FOLDER]
     # if run_type == 'train':
     #     # check dirs
     #     if any([os.path.exists(d) for d in dirs]):

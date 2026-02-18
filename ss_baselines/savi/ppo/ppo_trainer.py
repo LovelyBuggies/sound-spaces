@@ -28,10 +28,11 @@ from ss_baselines.common.baseline_registry import baseline_registry
 from ss_baselines.common.env_utils import construct_envs
 from ss_baselines.common.environments import get_env_class
 from ss_baselines.common.rollout_storage import RolloutStorage
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from ss_baselines.common.utils import (
     batch_obs,
     generate_video,
+    get_scene_name,
     linear_decay,
     plot_top_down_map,
     resize_observation,
@@ -541,8 +542,8 @@ class PPOTrainer(BaseRLTrainer):
             start_update = requeue_stats["start_update"]
             prev_time = requeue_stats["prev_time"]
 
-        with TensorboardWriter(
-            self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
+        with WandbWriter(
+            self.config.WB_LOG_DIR, flush_secs=self.flush_secs
         ) as writer:
             for update in range(start_update, self.config.NUM_UPDATES):
                 if ppo_cfg.use_linear_lr_decay:
@@ -660,14 +661,14 @@ class PPOTrainer(BaseRLTrainer):
     def _eval_checkpoint(
         self,
         checkpoint_path: str,
-        writer: TensorboardWriter,
+        writer: WandbWriter,
         checkpoint_index: int = 0
     ) -> Dict:
         r"""Evaluates a single checkpoint.
 
         Args:
             checkpoint_path: path of checkpoint
-            writer: tensorboard writer object for logging to tensorboard
+            writer: wandb writer object for logging to wandb
             checkpoint_index: index of cur checkpoint for logging
 
         Returns:
@@ -928,7 +929,7 @@ class PPOTrainer(BaseRLTrainer):
                             video_option=self.config.VIDEO_OPTION,
                             video_dir=self.config.VIDEO_DIR,
                             images=rgb_frames[i][:-1],
-                            scene_name=current_episodes[i].scene_id.split('/')[3],
+                            scene_name=get_scene_name(current_episodes[i].scene_id),
                             sound=sound,
                             sr=self.config.TASK_CONFIG.SIMULATOR.AUDIO.RIR_SAMPLING_RATE,
                             episode_id=current_episodes[i].episode_id,
@@ -953,7 +954,7 @@ class PPOTrainer(BaseRLTrainer):
                         top_down_map = plot_top_down_map(infos[i],
                                                          dataset=self.config.TASK_CONFIG.SIMULATOR.SCENE_DATASET,
                                                          pred=pred)
-                        scene = current_episodes[i].scene_id.split('/')[3]
+                        scene = get_scene_name(current_episodes[i].scene_id)
                         sound = current_episodes[i].sound_id.split('/')[1][:-4]
                         writer.add_image(f"{config.EVAL.SPLIT}_{scene}_{current_episodes[i].episode_id}_{sound}/"
                                          f"{infos[i]['spl']}",
@@ -985,7 +986,7 @@ class PPOTrainer(BaseRLTrainer):
             )
 
         # dump stats for each episode
-        stats_file = os.path.join(config.TENSORBOARD_DIR,
+        stats_file = os.path.join(config.WB_LOG_DIR,
                                   '{}_stats_{}.json'.format(config.EVAL.SPLIT, config.SEED))
         with open(stats_file, 'w') as fo:
             json.dump({','.join(key): value for key, value in stats_episodes.items()}, fo, cls=NpEncoder)

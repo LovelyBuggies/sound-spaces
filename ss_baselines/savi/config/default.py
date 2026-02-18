@@ -32,9 +32,9 @@ _C.TRAINER_NAME = "savi"
 _C.ENV_NAME = "AudioNavRLEnv"
 _C.SIMULATOR_GPU_ID = 0
 _C.TORCH_GPU_ID = 0
-_C.VIDEO_OPTION = ["disk", "tensorboard"]
+_C.VIDEO_OPTION = ["disk", "wandb"]
 _C.VISUALIZATION_OPTION = ["top_down_map"]
-_C.TENSORBOARD_DIR = "tb"
+_C.WB_LOG_DIR = "tb"
 _C.VIDEO_DIR = "video_dir"
 _C.TEST_EPISODE_COUNT = 2
 _C.EVAL_CKPT_PATH_DIR = "data/checkpoints"  # path to ckpt or path to ckpts dir
@@ -254,7 +254,7 @@ def get_config(
     # config_name = os.path.basename(config_paths).split('.')[0]
     if model_dir is not None:
         config.MODEL_DIR = model_dir
-    config.TENSORBOARD_DIR = os.path.join(config.MODEL_DIR, 'tb')
+    config.WB_LOG_DIR = os.path.join(config.MODEL_DIR, 'tb')
     config.CHECKPOINT_FOLDER = os.path.join(config.MODEL_DIR, 'data')
     config.VIDEO_DIR = os.path.join(config.MODEL_DIR, 'video_dir')
     config.LOG_FILE = os.path.join(config.MODEL_DIR, 'train.log')
@@ -264,7 +264,7 @@ def get_config(
         config.CMD_TRAILING_OPTS = opts
         config.merge_from_list(opts)
 
-    dirs = [config.VIDEO_DIR, config.TENSORBOARD_DIR, config.CHECKPOINT_FOLDER]
+    dirs = [config.VIDEO_DIR, config.WB_LOG_DIR, config.CHECKPOINT_FOLDER]
     if run_type == 'train':
         # check dirs
         if any([os.path.exists(d) for d in dirs]):

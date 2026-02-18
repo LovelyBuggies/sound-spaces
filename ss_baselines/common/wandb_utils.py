@@ -38,6 +38,8 @@ class WandbWriter:
                     project=os.getenv("WANDB_PROJECT", "ss-lite"),
                     entity=os.getenv("WANDB_ENTITY"),
                     name=os.getenv("WANDB_RUN_NAME"),
+                    group=os.getenv("WANDB_RUN_GROUP"),
+                    job_type=os.getenv("WANDB_JOB_TYPE"),
                     dir=log_dir if log_dir else None,
                     reinit=True,
                 )
@@ -121,6 +123,9 @@ class WandbWriter:
                 import wandb
 
                 video_np = np.asarray(images)
+                # wandb.Video expects [T, C, H, W] for numpy inputs.
+                if video_np.ndim == 4 and video_np.shape[-1] in (1, 3, 4):
+                    video_np = np.transpose(video_np, (0, 3, 1, 2))
                 if video_np.dtype != np.uint8:
                     if video_np.max() <= 1.0:
                         video_np = (video_np * 255.0).clip(0, 255).astype(np.uint8)
@@ -130,8 +135,26 @@ class WandbWriter:
                     {video_name: wandb.Video(video_np, fps=fps, format="mp4")},
                     step=step_idx,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[WARN] W&B video log failed for '{video_name}' at step {step_idx}: {e}")
+
+    def add_video_from_file(
+        self, video_name: str, step_idx: int, video_path: str, fps: int = 10
+    ) -> None:
+        if self.wandb_run is None:
+            return
+        if not video_path or not os.path.exists(video_path):
+            print(f"[WARN] W&B video file not found for '{video_name}': {video_path}")
+            return
+        try:
+            import wandb
+
+            self.wandb_run.log(
+                {video_name: wandb.Video(video_path, fps=fps, format="mp4")},
+                step=step_idx,
+            )
+        except Exception as e:
+            print(f"[WARN] W&B file video log failed for '{video_name}' at step {step_idx}: {e}")
 
     def flush(self) -> None:
         return

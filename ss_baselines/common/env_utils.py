@@ -41,8 +41,12 @@ def construct_envs(
     num_processes = config.NUM_PROCESSES
     configs = []
     env_classes = [env_class for _ in range(num_processes)]
-    dataset = make_dataset(config.TASK_CONFIG.DATASET.TYPE)
-    scenes = dataset.get_scenes_to_load(config.TASK_CONFIG.DATASET)
+    configured_scenes = list(config.TASK_CONFIG.DATASET.CONTENT_SCENES)
+    if len(configured_scenes) > 0 and "*" not in configured_scenes:
+        scenes = configured_scenes
+    else:
+        dataset = make_dataset(config.TASK_CONFIG.DATASET.TYPE)
+        scenes = dataset.get_scenes_to_load(config.TASK_CONFIG.DATASET)
     if not config.TASK_CONFIG.SIMULATOR.USE_RENDERED_OBSERVATIONS and '2n8kARJN3HM' in scenes:
         # this scene does not work for continuous rendering
         scenes.remove('2n8kARJN3HM')

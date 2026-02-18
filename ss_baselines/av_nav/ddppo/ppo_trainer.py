@@ -28,7 +28,7 @@ from ss_baselines.common.baseline_registry import baseline_registry
 from ss_baselines.common.env_utils import construct_envs
 from ss_baselines.common.environments import get_env_class
 from ss_baselines.common.rollout_storage import RolloutStorage
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from ss_baselines.common.utils import (
     batch_obs,
     generate_video,
@@ -405,8 +405,8 @@ class PPOTrainer(BaseRLTrainer):
             start_update = requeue_stats["start_update"]
             prev_time = requeue_stats["prev_time"]
 
-        with TensorboardWriter(
-            self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
+        with WandbWriter(
+            self.config.WB_LOG_DIR, flush_secs=self.flush_secs
         ) as writer:
             for update in range(start_update, self.config.NUM_UPDATES):
                 if ppo_cfg.use_linear_lr_decay:
@@ -483,10 +483,10 @@ class PPOTrainer(BaseRLTrainer):
                     for metric, value in metrics.items():
                         writer.add_scalar(f"Metrics/{metric}", value, count_steps)
 
-                writer.add_scalar("Policy/value_loss", value_loss, count_steps)
-                writer.add_scalar("Policy/policy_loss", action_loss, count_steps)
-                writer.add_scalar("Policy/entropy_loss", dist_entropy, count_steps)
-                writer.add_scalar('Policy/learning_rate', lr_scheduler.get_lr()[0], count_steps)
+                writer.add_scalar("policy/value_loss", value_loss, count_steps)
+                writer.add_scalar("policy/policy_loss", action_loss, count_steps)
+                writer.add_scalar("policy/entropy_loss", dist_entropy, count_steps)
+                writer.add_scalar('policy/learning_rate', lr_scheduler.get_lr()[0], count_steps)
 
                 # log stats
                 if update > 0 and update % self.config.LOG_INTERVAL == 0:

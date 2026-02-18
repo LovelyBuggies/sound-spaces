@@ -318,8 +318,22 @@ class SoundSpacesSim(Simulator, ABC):
 
     @property
     def current_scene_name(self):
-        # config.SCENE (_current_scene) looks like 'data/scene_datasets/replica/office_1/habitat/mesh_semantic.ply'
-        return self._current_scene.split('/')[3]
+        # Support both relative and absolute scene paths.
+        scene_path = os.path.normpath(self._current_scene)
+        parts = scene_path.split(os.sep)
+
+        # Typical layout: .../scene_datasets/<dataset>/<scene>/...
+        if "scene_datasets" in parts:
+            idx = parts.index("scene_datasets")
+            if idx + 2 < len(parts):
+                return parts[idx + 2]
+
+        # Replica mesh path often ends with .../<scene>/habitat/mesh_semantic.ply
+        if len(parts) >= 3 and parts[-2] == "habitat":
+            return parts[-3]
+
+        # Fallback to filename stem.
+        return os.path.splitext(os.path.basename(scene_path))[0]
 
     @property
     def current_scene_observation_file(self):
@@ -389,7 +403,8 @@ class SoundSpacesSim(Simulator, ABC):
             audio_sensor = self._sim.get_agent(0)._sensors["audio_sensor"]
             audio_sensor.setAudioSourceTransform(np.array(self.config.AGENT_0.GOAL_POSITION) + np.array([0, 1.5, 0]))
             if not self.material_configured:
-                audio_sensor.setAudioMaterialsJSON("data/mp3d_material_config.json")
+                materials_cfg = getattr(self.config.AUDIO, "MATERIALS_CONFIG_PATH", "data/mp3d_material_config.json")
+                audio_sensor.setAudioMaterialsJSON(materials_cfg)
                 self.material_configured = True
 
         if not is_same_scene or not is_same_sound:

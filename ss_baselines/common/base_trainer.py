@@ -14,7 +14,7 @@ import glob
 import torch
 
 from habitat import Config, logger
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from ss_baselines.common.utils import poll_checkpoint_folder
 
 
@@ -78,17 +78,17 @@ class BaseRLTrainer(BaseTrainer):
             else torch.device("cpu")
         )
 
-        if "tensorboard" in self.config.VIDEO_OPTION:
+        if "wandb" in self.config.VIDEO_OPTION:
             assert (
-                len(self.config.TENSORBOARD_DIR) > 0
-            ), "Must specify a tensorboard directory for video display"
+                len(self.config.WB_LOG_DIR) > 0
+            ), "Must specify a log directory for video display"
         if "disk" in self.config.VIDEO_OPTION:
             assert (
                 len(self.config.VIDEO_DIR) > 0
             ), "Must specify a directory for storing videos on disk"
 
-        with TensorboardWriter(
-            self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
+        with WandbWriter(
+            self.config.WB_LOG_DIR, flush_secs=self.flush_secs
         ) as writer:
             # eval last checkpoint in the folder
             if use_last_ckpt:
@@ -159,7 +159,7 @@ class BaseRLTrainer(BaseTrainer):
     def _eval_checkpoint(
         self,
         checkpoint_path: str,
-        writer: TensorboardWriter,
+        writer: WandbWriter,
         checkpoint_index: int = 0,
     ) -> None:
         r"""Evaluates a single checkpoint. Trainer algorithms should
@@ -167,7 +167,7 @@ class BaseRLTrainer(BaseTrainer):
 
         Args:
             checkpoint_path: path of checkpoint
-            writer: tensorboard writer object for logging to tensorboard
+            writer: logger writer object for scalar/media logging
             checkpoint_index: index of cur checkpoint for logging
 
         Returns:

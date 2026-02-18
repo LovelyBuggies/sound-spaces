@@ -23,7 +23,7 @@ from ss_baselines.common.baseline_registry import baseline_registry
 from ss_baselines.common.env_utils import construct_envs
 from ss_baselines.common.environments import get_env_class
 from ss_baselines.savi.models.rollout_storage import RolloutStorage
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from ss_baselines.common.utils import batch_obs, linear_decay
 from ss_baselines.savi.ddppo.algo.ddp_utils import (
     EXIT,
@@ -345,8 +345,8 @@ class DDPPOTrainer(PPOTrainer):
             prev_time = requeue_stats["prev_time"]
 
         with (
-            TensorboardWriter(
-                self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
+            WandbWriter(
+                self.config.WB_LOG_DIR, flush_secs=self.flush_secs
             )
             if self.world_rank == 0
             else contextlib.suppress()

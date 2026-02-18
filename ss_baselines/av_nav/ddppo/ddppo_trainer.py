@@ -15,13 +15,14 @@ import torch
 import torch.distributed as distrib
 import torch.nn as nn
 from torch.optim.lr_scheduler import LambdaLR
+from tqdm import tqdm
 
 from habitat import Config, logger
 from ss_baselines.common.baseline_registry import baseline_registry
 from ss_baselines.common.env_utils import construct_envs
 from ss_baselines.common.environments import get_env_class
 from ss_baselines.common.rollout_storage import RolloutStorage
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from ss_baselines.common.utils import batch_obs, linear_decay
 from ss_baselines.savi.ddppo.algo.ddp_utils import (
     EXIT,
@@ -232,8 +233,8 @@ class DDPPOTrainer(PPOTrainer):
             prev_time = requeue_stats["prev_time"]
 
         with (
-            TensorboardWriter(
-                self.config.TENSORBOARD_DIR, flush_secs=self.flush_secs
+            WandbWriter(
+                self.config.WB_LOG_DIR, flush_secs=self.flush_secs
             )
             if self.world_rank == 0
             else contextlib.suppress()
@@ -273,7 +274,11 @@ class DDPPOTrainer(PPOTrainer):
 
                 count_steps_delta = 0
                 self.agent.eval()
-                for step in range(ppo_cfg.num_steps):
+                for step in tqdm(
+                    range(ppo_cfg.num_steps),
+                    disable=self.world_rank != 0,
+                    leave=False,
+                ):
 
                     (
                         delta_pth_time,
@@ -357,10 +362,10 @@ class DDPPOTrainer(PPOTrainer):
                         for metric, value in metrics.items():
                             writer.add_scalar(f"Metrics/{metric}", value, count_steps)
 
-                    writer.add_scalar("Policy/value_loss", losses[0], count_steps)
-                    writer.add_scalar("Policy/policy_loss", losses[1], count_steps)
-                    writer.add_scalar("Policy/entropy_loss", losses[2], count_steps)
-                    writer.add_scalar('Policy/learning_rate', lr_scheduler.get_lr()[0], count_steps)
+                    writer.add_scalar("policy/value_loss", losses[0], count_steps)
+                    writer.add_scalar("policy/policy_loss", losses[1], count_steps)
+                    writer.add_scalar("policy/entropy_loss", losses[2], count_steps)
+                    writer.add_scalar('policy/learning_rate', lr_scheduler.get_lr()[0], count_steps)
 
                     # log stats
                     if update > 0 and update % self.config.LOG_INTERVAL == 0:
@@ -398,4 +403,3 @@ class DDPPOTrainer(PPOTrainer):
                         count_checkpoints += 1
 
             self.envs.close()
-

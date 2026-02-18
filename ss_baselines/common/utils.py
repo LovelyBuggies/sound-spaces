@@ -28,9 +28,29 @@ from moviepy.audio.AudioClip import CompositeAudioClip, AudioArrayClip
 from habitat.utils.visualizations.utils import images_to_video
 from habitat import logger
 from habitat_sim.utils.common import d3_40_colors_rgb
-from ss_baselines.common.tensorboard_utils import TensorboardWriter
+from ss_baselines.common.wandb_utils import WandbWriter
 from habitat.utils.visualizations import maps
 from habitat.utils.visualizations.utils import draw_collision
+
+
+def get_scene_name(scene_id: str) -> str:
+    scene_path = str(scene_id).replace("\\", "/")
+    if "/replica/" in scene_path:
+        suffix = scene_path.split("/replica/", 1)[1]
+        if suffix:
+            return suffix.split("/", 1)[0]
+
+    parts = [p for p in scene_path.split("/") if p]
+    if "habitat" in parts:
+        idx = parts.index("habitat")
+        if idx > 0:
+            return parts[idx - 1]
+
+    if len(parts) >= 2:
+        return parts[-2]
+    if len(parts) == 1:
+        return parts[0]
+    return "unknown_scene"
 
 
 class Flatten(nn.Module):
@@ -192,21 +212,21 @@ def generate_video(
     checkpoint_idx: int,
     metric_name: str,
     metric_value: float,
-    tb_writer: TensorboardWriter,
+    tb_writer: WandbWriter,
     fps: int = 10,
     audios: List[str] = None
 ) -> None:
     r"""Generate video according to specified information.
 
     Args:
-        video_option: string list of "tensorboard" or "disk" or both.
+        video_option: string list of "wandb", "disk", or legacy values.
         video_dir: path to target video directory.
         images: list of images to be converted to video.
         episode_id: episode id for video naming.
         checkpoint_idx: checkpoint index for video naming.
         metric_name: name of the performance metric, e.g. "spl".
         metric_value: value of metric.
-        tb_writer: tensorboard writer object for uploading video.
+        tb_writer: logger writer object for uploading video.
         fps: fps for generated video.
         audios: raw audio files
     Returns:
@@ -222,10 +242,44 @@ def generate_video(
             images_to_video(images, video_dir, video_name)
         else:
             images_to_video_with_audio(images, video_dir, video_name, audios, sr, fps=fps)
-    if "tensorboard" in video_option:
-        tb_writer.add_video_from_np_images(
-            f"episode{episode_id}", checkpoint_idx, images, fps=fps
-        )
+    if "wandb" in video_option:
+        # Use per-episode key to avoid overwriting videos logged at the same step.
+        wandb_video_key = f"videos/eval/{scene_name}_{episode_id}_{sound}"
+        if audios is not None and video_dir is not None:
+            wandb_video_dir = os.path.join(video_dir, "wandb_media")
+            video_file_path = images_to_video_with_audio(
+                images,
+                wandb_video_dir,
+                video_name,
+                audios,
+                sr,
+                fps=fps,
+            )
+            if video_file_path and os.path.exists(video_file_path) and os.path.getsize(video_file_path) > 0:
+                tb_writer.add_video_from_file(
+                    wandb_video_key,
+                    checkpoint_idx,
+                    video_file_path,
+                    fps=fps,
+                )
+            else:
+                print(
+                    f"[WARN] Audio video export empty for '{wandb_video_key}'. "
+                    "Falling back to frame-only upload."
+                )
+                tb_writer.add_video_from_np_images(
+                    wandb_video_key,
+                    checkpoint_idx,
+                    images,
+                    fps=fps,
+                )
+        else:
+            tb_writer.add_video_from_np_images(
+                wandb_video_key,
+                checkpoint_idx,
+                images,
+                fps=fps,
+            )
 
 
 def plot_top_down_map(info, dataset='replica', pred=None):
@@ -285,7 +339,7 @@ def images_to_video_with_audio(
     fps: int = 1,
     quality: Optional[float] = 5,
     **kwargs
-):
+) -> str:
     r"""Calls imageio to run FFMPEG on a list of images. For more info on
     parameters, see https://imageio.readthedocs.io/en/stable/format_ffmpeg.html
     Args:
@@ -315,7 +369,17 @@ def images_to_video_with_audio(
     composite_audio_clip = CompositeAudioClip(audio_clips)
     video_clip = mpy.ImageSequenceClip(images, fps=fps)
     video_with_new_audio = video_clip.set_audio(composite_audio_clip)
-    video_with_new_audio.write_videofile(os.path.join(output_dir, video_name))
+    output_path = os.path.join(output_dir, video_name)
+    video_with_new_audio.write_videofile(
+        output_path,
+        fps=fps,
+        codec="libx264",
+        audio_codec="aac",
+        audio_bitrate="128k",
+        preset="veryfast",
+        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
+    )
+    return output_path
 
 
 def resize_observation(observations, model_resolution):
@@ -539,7 +603,7 @@ def observations_to_image(observation: Dict, info: Dict, pred=None) -> np.ndarra
             image=top_down_map,
             agent_center_coord=map_agent_pos,
             agent_rotation=info["top_down_map"]["agent_angle"],
-            agent_radius_px=top_down_map.shape[0] // 16,
+            agent_radius_px=top_down_map.shape[0] // 32,
         )
         if pred is not None:
             from habitat.utils.geometry_utils import quaternion_rotate_vector
@@ -630,4 +694,42 @@ def observations_to_image(observation: Dict, info: Dict, pred=None) -> np.ndarra
                                        cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 2, cv2.LINE_AA)
 
         frame = np.concatenate((egocentric_view, top_down_map), axis=1)
+    # Overlay per-step eval signals so videos directly show success state.
+    overlay_lines = []
+    if "distance_to_goal" in info:
+        try:
+            overlay_lines.append(f"dist: {float(info['distance_to_goal']):.3f}")
+        except (TypeError, ValueError):
+            overlay_lines.append(f"dist: {info['distance_to_goal']}")
+    if "success" in info:
+        try:
+            overlay_lines.append(f"success: {int(info['success'])}")
+        except (TypeError, ValueError):
+            overlay_lines.append(f"success: {info['success']}")
+
+    if overlay_lines:
+        y = 14
+        for line in overlay_lines:
+            (text_w, text_h), baseline = cv2.getTextSize(
+                line, cv2.FONT_HERSHEY_SIMPLEX, 0.3, 1
+            )
+            cv2.rectangle(
+                frame,
+                (8, y - text_h - 2),
+                (8 + text_w + 4, y + baseline + 2),
+                (0, 0, 0),
+                thickness=-1,
+            )
+            cv2.putText(
+                frame,
+                line,
+                (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.3,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+            y += 14
+
     return frame
