@@ -141,20 +141,16 @@ class WandbWriter:
     def add_video_from_file(
         self, video_name: str, step_idx: int, video_path: str, fps: int = 10
     ) -> None:
-        if self.wandb_run is None:
-            return
-        if not video_path or not os.path.exists(video_path):
-            print(f"[WARN] W&B video file not found for '{video_name}': {video_path}")
-            return
-        try:
-            import wandb
+        if self.wandb_run is not None:
+            try:
+                import wandb
 
-            self.wandb_run.log(
-                {video_name: wandb.Video(video_path, fps=fps, format="mp4")},
-                step=step_idx,
-            )
-        except Exception as e:
-            print(f"[WARN] W&B file video log failed for '{video_name}' at step {step_idx}: {e}")
+                self.wandb_run.log(
+                    {video_name: wandb.Video(video_path, fps=fps, format="mp4")},
+                    step=step_idx,
+                )
+            except Exception as e:
+                print(f"[WARN] W&B file video log failed for '{video_name}' at step {step_idx}: {e}")
 
     def flush(self) -> None:
         return

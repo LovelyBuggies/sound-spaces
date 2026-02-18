@@ -255,24 +255,12 @@ def generate_video(
                 sr,
                 fps=fps,
             )
-            if video_file_path and os.path.exists(video_file_path) and os.path.getsize(video_file_path) > 0:
-                tb_writer.add_video_from_file(
-                    wandb_video_key,
-                    checkpoint_idx,
-                    video_file_path,
-                    fps=fps,
-                )
-            else:
-                print(
-                    f"[WARN] Audio video export empty for '{wandb_video_key}'. "
-                    "Falling back to frame-only upload."
-                )
-                tb_writer.add_video_from_np_images(
-                    wandb_video_key,
-                    checkpoint_idx,
-                    images,
-                    fps=fps,
-                )
+            tb_writer.add_video_from_file(
+                wandb_video_key,
+                checkpoint_idx,
+                video_file_path,
+                fps=fps,
+            )
         else:
             tb_writer.add_video_from_np_images(
                 wandb_video_key,
@@ -370,15 +358,7 @@ def images_to_video_with_audio(
     video_clip = mpy.ImageSequenceClip(images, fps=fps)
     video_with_new_audio = video_clip.set_audio(composite_audio_clip)
     output_path = os.path.join(output_dir, video_name)
-    video_with_new_audio.write_videofile(
-        output_path,
-        fps=fps,
-        codec="libx264",
-        audio_codec="aac",
-        audio_bitrate="128k",
-        preset="veryfast",
-        ffmpeg_params=["-pix_fmt", "yuv420p", "-movflags", "+faststart"],
-    )
+    video_with_new_audio.write_videofile(output_path)
     return output_path
 
 
