@@ -681,11 +681,13 @@ def observations_to_image(observation: Dict, info: Dict, pred=None) -> np.ndarra
             overlay_lines.append(f"dist: {float(info['distance_to_goal']):.3f}")
         except (TypeError, ValueError):
             overlay_lines.append(f"dist: {info['distance_to_goal']}")
-    if "success" in info:
+    if "action" in info:
+        overlay_lines.append(f"action: {info['action']}")
+    if "step_count" in info:
         try:
-            overlay_lines.append(f"success: {int(info['success'])}")
+            overlay_lines.append(f"step_count: {int(info['step_count'])}")
         except (TypeError, ValueError):
-            overlay_lines.append(f"success: {info['success']}")
+            overlay_lines.append(f"step_count: {info['step_count']}")
 
     if overlay_lines:
         y = 14
@@ -695,7 +697,7 @@ def observations_to_image(observation: Dict, info: Dict, pred=None) -> np.ndarra
                 line,
                 (10, y),
                 cv2.FONT_HERSHEY_DUPLEX,
-                0.3,
+                0.4,
                 (255, 255, 255),
                 1,
                 cv2.LINE_AA,

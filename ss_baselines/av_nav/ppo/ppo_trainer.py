@@ -10,6 +10,7 @@ import os
 import time
 import logging
 import glob
+import cv2
 from collections import deque
 from typing import Dict, List
 import json
@@ -642,6 +643,13 @@ class PPOTrainer(BaseRLTrainer):
             os.makedirs(self.config.VIDEO_DIR, exist_ok=True)
 
         t = tqdm(total=self.config.TEST_EPISODE_COUNT)
+        episode_step_counts = [0 for _ in range(self.config.NUM_PROCESSES)]
+        action_name_map = {
+            0: "STOP",
+            1: "MOVE_FORWARD",
+            2: "TURN_LEFT",
+            3: "TURN_RIGHT",
+        }
         while (
             len(stats_episodes) < self.config.TEST_EPISODE_COUNT
             and self.envs.num_envs > 0
@@ -662,13 +670,22 @@ class PPOTrainer(BaseRLTrainer):
             if config.FOLLOW_SHORTEST_PATH:
                 actions = [follower.get_next_action(
                     self.envs.workers[0]._env.habitat_env.current_episode.goals[0].view_points[0].agent_state.position)]
+                step_actions = [int(a) for a in actions]
                 outputs = self.envs.step(actions)
             else:
-                outputs = self.envs.step([a[0].item() for a in actions])
-
+                step_actions = [int(a[0].item()) for a in actions]
+                outputs = self.envs.step(step_actions)
             observations, rewards, dones, infos = [
                 list(x) for x in zip(*outputs)
             ]
+            for i in range(self.envs.num_envs):
+                episode_step_counts[i] += 1
+                action_idx = int(step_actions[i])
+                action_name = action_name_map.get(action_idx, f"ACTION_{action_idx}")
+
+                infos[i]["action"] = action_name
+                infos[i]["step_count"] = int(episode_step_counts[i])
+
             for i in range(self.envs.num_envs):
                 if len(self.config.VIDEO_OPTION) > 0:
                     if config.TASK_CONFIG.SIMULATOR.CONTINUOUS_VIEW_CHANGE and 'intermediate' in observations[i]:
@@ -735,6 +752,24 @@ class PPOTrainer(BaseRLTrainer):
                             sound = current_episodes[i].info['sound']
                         else:
                             sound = current_episodes[i].sound_id.split('/')[1][:-4]
+                        # The last collected frame is from the reset observation of the next episode.
+                        # Add terminal success on the last valid frame.
+                        if len(rgb_frames[i]) >= 2:
+                            success_value = infos[i].get("success", 0)
+                            try:
+                                success_flag = float(success_value) >= 1.0
+                            except (TypeError, ValueError):
+                                success_flag = str(success_value).lower() in {"1", "true", "yes"}
+                            cv2.putText(
+                                rgb_frames[i][-2],
+                                f"success: {'true' if success_flag else 'false'}",
+                                (10, 56),
+                                cv2.FONT_HERSHEY_DUPLEX,
+                                0.4,
+                                (255, 255, 255),
+                                1,
+                                cv2.LINE_AA,
+                            )
                         episode_images = rgb_frames[i][:-1]
                         episode_audios = audios[i][:-1]
                         if len(episode_audios) != len(episode_images) or len(episode_audios) == 0:
@@ -759,6 +794,7 @@ class PPOTrainer(BaseRLTrainer):
                         # to be consistent, do not use the last frame
                         rgb_frames[i] = []
                         audios[i] = []
+                    episode_step_counts[i] = 0
 
                     if "top_down_map" in self.config.VISUALIZATION_OPTION:
                         top_down_map = plot_top_down_map(infos[i],
@@ -787,6 +823,12 @@ class PPOTrainer(BaseRLTrainer):
                 batch,
                 rgb_frames,
             )
+            if len(envs_to_pause) > 0:
+                episode_step_counts = [
+                    episode_step_counts[i]
+                    for i in range(len(episode_step_counts))
+                    if i not in envs_to_pause
+                ]
 
         aggregated_stats = dict()
         for stat_key in next(iter(stats_episodes.values())).keys():
