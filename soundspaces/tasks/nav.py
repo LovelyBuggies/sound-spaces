@@ -769,8 +769,13 @@ class PoseSensor(Sensor):
         self._episode_time += 1.0
 
         return np.array(
-            [-agent_position_xyz[2], agent_position_xyz[0], agent_heading, ep_time],
-            dtype=np.float32
+            [
+                -agent_position_xyz[2],
+                agent_position_xyz[0],
+                float(agent_heading[0]),
+                ep_time,
+            ],
+            dtype=np.float32,
         )
 
 
