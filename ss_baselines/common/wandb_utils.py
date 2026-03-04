@@ -61,10 +61,17 @@ class WandbWriter:
             except Exception:
                 pass
 
+    @staticmethod
+    def _normalize_step(global_step: Any) -> Any:
+        if global_step is None:
+            return None
+        return int(global_step)
+
     def add_scalar(self, tag: str, scalar_value: Any, global_step: int = None) -> None:
         if self.wandb_run is not None:
             try:
-                self.wandb_run.log({tag: scalar_value}, step=global_step)
+                step = self._normalize_step(global_step)
+                self.wandb_run.log({tag: scalar_value}, step=step)
             except Exception as e:
                 msg = (
                     f"[WARN] W&B add_scalar failed for tag='{tag}', "
@@ -81,7 +88,8 @@ class WandbWriter:
             return
         try:
             payload = {f"{main_tag}/{k}": v for k, v in tag_scalar_dict.items()}
-            self.wandb_run.log(payload, step=global_step)
+            step = self._normalize_step(global_step)
+            self.wandb_run.log(payload, step=step)
         except Exception:
             pass
 
@@ -106,7 +114,8 @@ class WandbWriter:
                     img = (img * 255.0).clip(0, 255).astype(np.uint8)
                 else:
                     img = img.clip(0, 255).astype(np.uint8)
-            self.wandb_run.log({tag: wandb.Image(img)}, step=global_step)
+            step = self._normalize_step(global_step)
+            self.wandb_run.log({tag: wandb.Image(img)}, step=step)
         except Exception:
             pass
 
@@ -117,7 +126,8 @@ class WandbWriter:
             import wandb
 
             arr = np.asarray(values).reshape(-1)
-            self.wandb_run.log({tag: wandb.Histogram(arr)}, step=global_step)
+            step = self._normalize_step(global_step)
+            self.wandb_run.log({tag: wandb.Histogram(arr)}, step=step)
         except Exception:
             pass
 
@@ -137,9 +147,10 @@ class WandbWriter:
                         video_np = (video_np * 255.0).clip(0, 255).astype(np.uint8)
                     else:
                         video_np = video_np.clip(0, 255).astype(np.uint8)
+                step = self._normalize_step(step_idx)
                 self.wandb_run.log(
                     {video_name: wandb.Video(video_np, fps=fps, format="mp4")},
-                    step=step_idx,
+                    step=step,
                 )
             except Exception as e:
                 print(f"[WARN] W&B video log failed for '{video_name}' at step {step_idx}: {e}")
@@ -151,9 +162,10 @@ class WandbWriter:
             try:
                 import wandb
 
+                step = self._normalize_step(step_idx)
                 self.wandb_run.log(
                     {video_name: wandb.Video(video_path, fps=fps, format="mp4")},
-                    step=step_idx,
+                    step=step,
                 )
             except Exception as e:
                 print(f"[WARN] W&B file video log failed for '{video_name}' at step {step_idx}: {e}")
