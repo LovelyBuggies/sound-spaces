@@ -703,13 +703,52 @@ class SoundSpacesSim(Simulator, ABC):
         return audiogoal
 
     def get_current_spectrogram_observation(self, audiogoal2spectrogram):
-        if self.config.AUDIO.HAS_DISTRACTOR_SOUND:
+        # Optional: dump raw binaural audiogoal waveform to wav for making "audio-in-video"
+        dump_audio = os.getenv("SS_DUMP_AUDIO", "0") == "1"
+        if dump_audio:
+            out_dir = os.getenv("SS_AUDIO_DIR", "data/checkpoints/_audio_dump")
+            os.makedirs(out_dir, exist_ok=True)
+
+            # Always compute audiogoal so we can dump it even if spectrogram is cached
             audiogoal = self.get_current_audiogoal_observation()
+
+            try:
+                import numpy as np
+                from scipy.io import wavfile
+
+                a = np.asarray(audiogoal)  # expected shape (2, sampling_rate)
+                # convert to (T, 2)
+                if a.ndim == 2 and a.shape[0] == 2:
+                    a = a.T
+                # normalize to int16 safely
+                a = a / (np.max(np.abs(a)) + 1e-8)
+                wav = (a * 32767).astype(np.int16)
+
+                sr = int(self.config.AUDIO.RIR_SAMPLING_RATE)
+                step = int(getattr(self, "_episode_step_count", 0))
+                recv = int(getattr(self, "_receiver_position_index", -1))
+                src  = int(getattr(self, "_source_position_index", -1))
+                azi  = int(getattr(self, "azimuth_angle", -1))
+
+                # filename includes step + geometry so you can sanity-check later
+                wavfile.write(
+                    os.path.join(out_dir, f"step_{step:04d}_r{recv}_s{src}_azi{azi}.wav"),
+                    sr,
+                    wav,
+                )
+            except Exception as e:
+                logging.warning(f"SS_DUMP_AUDIO enabled but failed to write wav: {e}")
+
+        # Normal path: compute spectrogram (keep original caching behavior)
+        if self.config.AUDIO.HAS_DISTRACTOR_SOUND:
+            if not dump_audio:
+                audiogoal = self.get_current_audiogoal_observation()
             spectrogram = audiogoal2spectrogram(audiogoal)
         else:
             joint_index = (self._source_position_index, self._receiver_position_index, self.azimuth_angle)
             if joint_index not in self._spectrogram_cache:
-                audiogoal = self.get_current_audiogoal_observation()
+                if not dump_audio:
+                    audiogoal = self.get_current_audiogoal_observation()
                 self._spectrogram_cache[joint_index] = audiogoal2spectrogram(audiogoal)
             spectrogram = self._spectrogram_cache[joint_index]
 

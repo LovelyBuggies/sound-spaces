@@ -65,8 +65,14 @@ class WandbWriter:
         if self.wandb_run is not None:
             try:
                 self.wandb_run.log({tag: scalar_value}, step=global_step)
-            except Exception:
-                pass
+            except Exception as e:
+                msg = (
+                    f"[WARN] W&B add_scalar failed for tag='{tag}', "
+                    f"step={global_step}, value={scalar_value}: {e}"
+                )
+                if self.wandb_strict:
+                    raise RuntimeError(msg) from e
+                print(msg)
 
     def add_scalars(
         self, main_tag: str, tag_scalar_dict: Mapping[str, Any], global_step: int = None
