@@ -14,6 +14,7 @@ import glob
 import magnum as mn
 import numpy as np
 
+import quaternion  # noqa: F401
 from habitat_sim.utils.common import quat_from_angle_axis
 import habitat_sim
 from scipy.io import wavfile

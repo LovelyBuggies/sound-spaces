@@ -21,6 +21,7 @@ import numpy as np
 import networkx as nx
 from gym import spaces
 
+import quaternion  # noqa: F401
 from habitat.core.registry import registry
 import habitat_sim
 from habitat_sim.utils.common import quat_from_angle_axis, quat_from_coeffs, quat_to_angle_axis

@@ -9,6 +9,7 @@ from typing import Optional, Union
 
 import numpy as np
 
+import quaternion  # noqa: F401
 import habitat_sim
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
 from habitat.sims.habitat_simulator.habitat_simulator import HabitatSim

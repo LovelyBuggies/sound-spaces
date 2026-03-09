@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import quaternion  # noqa: F401
 import habitat_sim
 from habitat.core.registry import registry
 from habitat.core.simulator import ActionSpaceConfiguration

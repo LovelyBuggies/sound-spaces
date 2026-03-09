@@ -11,6 +11,7 @@ import numpy as np
 import networkx as nx
 import matplotlib.pyplot as plt
 
+import quaternion  # noqa: F401
 import habitat_sim
 import habitat_sim.bindings as hsim
 from networkx import connected_components

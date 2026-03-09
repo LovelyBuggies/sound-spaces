@@ -11,6 +11,7 @@ import pickle
 import magnum as mn
 import numpy as np
 
+import quaternion  # noqa: F401
 import habitat_sim
 from habitat.core.registry import registry
 from habitat.core.simulator import SensorSuite
