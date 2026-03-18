@@ -10,6 +10,9 @@ import argparse
 import logging
 import os
 
+# Workaround for habitat-sim + RLRAudioPropagation invalid pointer issue.
+import quaternion  # noqa: F401
+
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=UserWarning)

@@ -5,7 +5,9 @@
 # LICENSE file in the root directory of this source tree.
 
 from typing import Any, Type, Union
+import hashlib
 import logging
+import os
 
 import numpy as np
 import torch
@@ -414,6 +416,143 @@ def asnumpy(v):
         raise ValueError('Invalid input')
 
 
+class CategoryPromptEncoder:
+    """Lightweight placeholder for a future text encoder-backed category sensor."""
+
+    def __init__(self, config: Config):
+        self._category_to_index = CATEGORY_INDEX_MAPPING
+        self._output_dim = len(self._category_to_index)
+        self._encoding = getattr(config, "ENCODING", "one_hot")
+        self._prompt_template = getattr(
+            config, "PROMPT_TEMPLATE", "target object: {category_name}"
+        )
+        self._mock_embedding_dim = getattr(config, "MOCK_TEXT_EMBEDDING_DIM", 32)
+        self._minilm_model_name = getattr(
+            config,
+            "MINILM_MODEL_NAME",
+            "sentence-transformers/all-MiniLM-L6-v2",
+        )
+        self._similarity_temperature = float(
+            getattr(config, "SIMILARITY_TEMPERATURE", 1.0)
+        )
+        seed = getattr(config, "MOCK_TEXT_SEED", 0)
+        self._ordered_categories = [
+            category_name
+            for category_name, _ in sorted(
+                self._category_to_index.items(), key=lambda item: item[1]
+            )
+        ]
+
+        rng = np.random.RandomState(seed)
+        self._projection = rng.standard_normal(
+            (self._mock_embedding_dim, self._output_dim)
+        ).astype(np.float32) / np.sqrt(self._mock_embedding_dim)
+
+        if self._encoding not in {"one_hot", "mock_text", "minilm_similarity"}:
+            raise ValueError(f"Unsupported category encoding: {self._encoding}")
+
+        self._minilm_model = None
+        self._prototype_embeddings = None
+        self._category_distribution_cache = None
+        if self._encoding == "minilm_similarity":
+            self._init_minilm_encoder()
+
+    def _build_prompt(self, category_name: str) -> str:
+        return self._prompt_template.format(category_name=category_name)
+
+    def _encode_one_hot(self, category_name: str) -> np.ndarray:
+        index = self._category_to_index[category_name]
+        onehot = np.zeros(self._output_dim, dtype=np.float32)
+        onehot[index] = 1.0
+        return onehot
+
+    def _prompt_to_mock_embedding(self, prompt: str) -> np.ndarray:
+        digest = hashlib.sha256(prompt.encode("utf-8")).digest()
+        raw = np.frombuffer(digest, dtype=np.uint8).astype(np.float32)
+        repeats = int(np.ceil(self._mock_embedding_dim / raw.shape[0]))
+        tiled = np.tile(raw, repeats)[: self._mock_embedding_dim]
+        return tiled / 127.5 - 1.0
+
+    def _encode_mock_text(self, category_name: str) -> np.ndarray:
+        prompt = self._build_prompt(category_name)
+        embedding = self._prompt_to_mock_embedding(prompt)
+        return np.tanh(embedding @ self._projection).astype(np.float32)
+
+    def _init_minilm_encoder(self) -> None:
+        if self._similarity_temperature <= 0:
+            raise ValueError("SIMILARITY_TEMPERATURE must be positive")
+
+        # Keep transformers on the PyTorch path to avoid TensorFlow/Keras import issues.
+        os.environ.setdefault("USE_TF", "0")
+        os.environ.setdefault("TRANSFORMERS_NO_TF", "1")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+        try:
+            from sentence_transformers import SentenceTransformer
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to import sentence-transformers for CATEGORY "
+                "ENCODING=minilm_similarity. Install a compatible "
+                "sentence-transformers/transformers stack first."
+            ) from exc
+
+        try:
+            self._minilm_model = SentenceTransformer(
+                self._minilm_model_name, device="cpu"
+            )
+            prototype_prompts = [
+                self._build_prompt(category_name)
+                for category_name in self._ordered_categories
+            ]
+            self._prototype_embeddings = self._minilm_model.encode(
+                prototype_prompts,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+            ).astype(np.float32)
+            # Keep prototype embeddings explicitly normalized so the later
+            # dot-product is guaranteed to match cosine similarity.
+            self._prototype_embeddings = self._l2_normalize(
+                self._prototype_embeddings
+            )
+
+            similarity_matrix = (
+                self._prototype_embeddings @ self._prototype_embeddings.T
+            ).astype(np.float32)
+
+            self._category_distribution_cache = {}
+            for category_name, similarities in zip(
+                self._ordered_categories, similarity_matrix
+            ):
+                self._category_distribution_cache[category_name] = self._softmax(
+                    similarities / self._similarity_temperature
+                )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to initialize MiniLM category encoder "
+                f"from model '{self._minilm_model_name}'."
+            ) from exc
+
+    def _softmax(self, values: np.ndarray) -> np.ndarray:
+        shifted = values - np.max(values)
+        exp_values = np.exp(shifted)
+        return (exp_values / np.sum(exp_values)).astype(np.float32)
+
+    def _l2_normalize(self, embeddings: np.ndarray) -> np.ndarray:
+        norms = np.linalg.norm(embeddings, axis=-1, keepdims=True)
+        norms = np.clip(norms, a_min=1e-12, a_max=None)
+        return (embeddings / norms).astype(np.float32)
+
+    def _encode_minilm_similarity(self, category_name: str) -> np.ndarray:
+        return self._category_distribution_cache[category_name]
+
+    def encode(self, category_name: str) -> np.ndarray:
+        if self._encoding == "one_hot":
+            return self._encode_one_hot(category_name)
+        if self._encoding == "mock_text":
+            return self._encode_mock_text(category_name)
+        return self._encode_minilm_similarity(category_name)
+
+
 @registry.register_sensor(name="Category")
 class Category(Sensor):
     cls_uuid: str = "category"
@@ -423,6 +562,7 @@ class Category(Sensor):
     ):
         super().__init__(config=config)
         self._sim = sim
+        self._encoder = CategoryPromptEncoder(config)
 
     def _get_uuid(self, *args: Any, **kwargs: Any):
         return self.cls_uuid
@@ -431,21 +571,27 @@ class Category(Sensor):
         return SensorTypes.COLOR
 
     def _get_observation_space(self, *args: Any, **kwargs: Any):
+        encoding = getattr(self.config, "ENCODING", "one_hot")
+        if encoding == "one_hot":
+            low = 0.0
+            high = 1.0
+        elif encoding == "minilm_similarity":
+            low = 0.0
+            high = 1.0
+        else:
+            low = np.finfo(np.float32).min
+            high = np.finfo(np.float32).max
         return spaces.Box(
-            low=0,
-            high=1,
+            low=low,
+            high=high,
             shape=(len(CATEGORY_INDEX_MAPPING.keys()),),
-            dtype=bool
+            dtype=np.float32,
         )
 
     def get_observation(
         self, *args: Any, observations, episode: Episode, **kwargs: Any
     ) -> object:
-        index = CATEGORY_INDEX_MAPPING[episode.object_category]
-        onehot = np.zeros(len(CATEGORY_INDEX_MAPPING.keys()))
-        onehot[index] = 1
-
-        return onehot
+        return self._encoder.encode(episode.object_category)
 
 
 @registry.register_sensor(name="CategoryBelief")

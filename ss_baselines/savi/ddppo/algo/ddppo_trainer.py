@@ -264,6 +264,27 @@ class DDPPOTrainer(PPOTrainer):
             logger.info(f"config: {self.config}")
 
         observations = self.envs.reset()
+        if self.world_rank == 0 and len(observations) > 0:
+            first_obs = observations[0]
+            logger.info("===== observation keys =====")
+            logger.info(list(first_obs.keys()))
+            for k, v in first_obs.items():
+                try:
+                    logger.info("%s %s", k, v.shape)
+                except Exception:
+                    logger.info("%s %s %s", k, type(v), v)
+
+            if "category" in first_obs:
+                logger.info("category[0] = %s", first_obs["category"])
+
+            if "category_belief" in first_obs:
+                logger.info("category_belief[0] = %s", first_obs["category_belief"])
+
+            if "location_belief" in first_obs:
+                logger.info("location_belief[0] = %s", first_obs["location_belief"])
+
+            if "pose" in first_obs:
+                logger.info("pose[0] = %s", first_obs["pose"])
         batch = batch_obs(observations, device=self.device)
 
         obs_space = self.envs.observation_spaces[0]
@@ -529,4 +550,3 @@ class DDPPOTrainer(PPOTrainer):
                         count_checkpoints += 1
 
             self.envs.close()
-
